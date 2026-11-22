@@ -1,24 +1,18 @@
+
 name: Build Spider Night APK
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download game
+      - name: Download repository
         uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -26,46 +20,82 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Prepare Capacitor
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Find game files
+        run: |
+          GAME_DIR=$(dirname "$(find . -type f -name index.html -not -path '*/node_modules/*' | head -n 1)")
+
+          if [ ! -f "$GAME_DIR/index.html" ]; then
+            echo "ERROR: index.html not found"
+            exit 1
+          fi
+
+          echo "GAME_DIR=$GAME_DIR" >> $GITHUB_ENV
+          echo "Found game in: $GAME_DIR"
+
+      - name: Prepare project
         run: |
           mkdir -p www
-          cp index.html www/
-          cp multiplayer.js www/
+          cp "$GAME_DIR/index.html" www/
+
+          if [ -f "$GAME_DIR/multiplayer.js" ]; then
+            cp "$GAME_DIR/multiplayer.js" www/
+          fi
 
           npm init -y
-
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
 
           npx cap init "Spider Night" "com.spidernight.game" --web-dir www
-
           npx cap add android
 
-      - name: Configure Android
+      - name: Set icon
+        run: |
+          python3 -m pip install pillow
+
+          ICON=$(find . -type f -name launcher-icon.jpg | head -n 1)
+
+          if [ -n "$ICON" ]; then
+            python3 - "$ICON" <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          import sys
+
+          img = Image.open(sys.argv[1]).convert("RGBA")
+          side = min(img.size)
+          x = (img.width - side) // 2
+          y = (img.height - side) // 2
+          img = img.crop((x, y, x + side, y + side)).resize((512, 512))
+
+          res = Path("android/app/src/main/res")
+          for folder in res.glob("mipmap-*"):
+              for name in ["ic_launcher.png", "ic_launcher_round.png"]:
+                  target = folder / name
+                  if target.exists():
+                      img.save(target)
+
+          for folder in res.glob("drawable*"):
+              target = folder / "ic_launcher_foreground.png"
+              if target.exists():
+                  img.save(target)
+          PY
+          fi
+
+      - name: Configure landscape
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
-
-          if "android.permission.INTERNET" not in s:
-              s = s.replace(
-                  "<manifest",
-                  '<manifest\n    xmlns:android="http://schemas.android.com/apk/res/android"',
-                  1
-              ) if "xmlns:android=" not in s else s
-              s = s.replace(
-                  "<application",
-                  '<uses-permission android:name="android.permission.INTERNET" />\n    <application',
-                  1
-              )
-
           s = s.replace(
-              "<activity",
+              '<activity',
               '<activity android:screenOrientation="sensorLandscape"',
               1
           )
-
           p.write_text(s)
           PY
 
