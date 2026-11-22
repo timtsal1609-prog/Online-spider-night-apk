@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java
@@ -25,26 +25,39 @@ jobs:
         with:
           node-version: 20
 
-      - name: Find game files
+      - name: Extract game archives
         run: |
-          GAME_DIR=$(dirname "$(find . -type f -name index.html -not -path '*/node_modules/*' | head -n 1)")
+          mkdir -p extracted
 
-          if [ ! -f "$GAME_DIR/index.html" ]; then
-            echo "ERROR: index.html not found"
+          find . -type f -iname "*.zip" \
+            -not -path "./extracted/*" \
+            -not -path "./node_modules/*" \
+            -print0 | while IFS= read -r -d '' file; do
+              echo "Extracting: $file"
+              unzip -o "$file" -d extracted
+            done
+
+      - name: Locate game
+        run: |
+          GAME=$(find . -type f -name index.html \
+            -not -path "*/node_modules/*" \
+            -not -path "*/.git/*" | head -n 1)
+
+          if [ -z "$GAME" ]; then
+            echo "ERROR: No index.html found!"
+            echo "Repository files:"
+            find . -maxdepth 4 -type f
             exit 1
           fi
 
+          GAME_DIR=$(dirname "$GAME")
           echo "GAME_DIR=$GAME_DIR" >> $GITHUB_ENV
-          echo "Found game in: $GAME_DIR"
+          echo "Game found: $GAME"
 
-      - name: Prepare project
+      - name: Prepare Capacitor
         run: |
           mkdir -p www
-          cp "$GAME_DIR/index.html" www/
-
-          if [ -f "$GAME_DIR/multiplayer.js" ]; then
-            cp "$GAME_DIR/multiplayer.js" www/
-          fi
+          cp -R "$GAME_DIR"/. www/
 
           npm init -y
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
@@ -52,7 +65,7 @@ jobs:
           npx cap init "Spider Night" "com.spidernight.game" --web-dir www
           npx cap add android
 
-      - name: Set icon
+      - name: Apply app icon
         run: |
           python3 -m pip install pillow
 
@@ -66,21 +79,15 @@ jobs:
 
           img = Image.open(sys.argv[1]).convert("RGBA")
           side = min(img.size)
-          x = (img.width - side) // 2
-          y = (img.height - side) // 2
-          img = img.crop((x, y, x + side, y + side)).resize((512, 512))
+          x = (img.width-side)//2
+          y = (img.height-side)//2
+          img = img.crop((x,y,x+side,y+side)).resize((512,512))
 
-          res = Path("android/app/src/main/res")
-          for folder in res.glob("mipmap-*"):
-              for name in ["ic_launcher.png", "ic_launcher_round.png"]:
-                  target = folder / name
-                  if target.exists():
-                      img.save(target)
-
-          for folder in res.glob("drawable*"):
-              target = folder / "ic_launcher_foreground.png"
-              if target.exists():
-                  img.save(target)
+          for folder in Path("android/app/src/main/res").glob("mipmap-*"):
+              for name in ("ic_launcher.png", "ic_launcher_round.png"):
+                  p = folder/name
+                  if p.exists():
+                      img.save(p)
           PY
           fi
 
@@ -88,7 +95,6 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
           s = s.replace(
